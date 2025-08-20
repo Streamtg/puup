@@ -1,6 +1,3 @@
-# Taken from megadlbot_oss <https://github.com/eyaadh/megadlbot_oss/blob/master/mega/webserver/routes.py>
-# Thanks to Eyaadh <https://github.com/eyaadh>
-
 import re
 import time
 import math
@@ -14,7 +11,6 @@ from WebStreamer.server.exceptions import FIleNotFound, InvalidHash
 from WebStreamer import Var, utils, StartTime, __version__, StreamBot
 
 logger = logging.getLogger("routes")
-
 
 routes = web.RouteTableDef()
 
@@ -35,7 +31,6 @@ async def root_route_handler(_):
             "version": f"v{__version__}",
         }
     )
-
 
 @routes.get(r"/{path:\S+}", allow_head=True)
 async def stream_handler(request: web.Request):
@@ -77,16 +72,17 @@ async def media_streamer(request: web.Request, message_id: int, secure_hash: str
         logger.debug(f"Creating new ByteStreamer object for client {index}")
         tg_connect = utils.ByteStreamer(faster_client)
         class_cache[faster_client] = tg_connect
+
     logger.debug("before calling get_file_properties")
     file_id = await tg_connect.get_file_properties(message_id)
     logger.debug("after calling get_file_properties")
-    
     
     if utils.get_hash(file_id.unique_id, Var.HASH_LENGTH) != secure_hash:
         logger.debug(f"Invalid hash for message with ID {message_id}")
         raise InvalidHash
     
     file_size = file_id.file_size
+    file_name = utils.get_name(file_id)
 
     if range_header:
         from_bytes, until_bytes = range_header.replace("bytes=", "").split("-")
@@ -115,24 +111,26 @@ async def media_streamer(request: web.Request, message_id: int, secure_hash: str
     body = tg_connect.yield_file(
         file_id, index, offset, first_part_cut, last_part_cut, part_count, chunk_size
     )
-    mime_type = file_id.mime_type
-    file_name = utils.get_name(file_id)
-    disposition = "attachment"
 
-    if not mime_type:
-        mime_type = mimetypes.guess_type(file_name)[0] or "application/octet-stream"
+    mime_type = file_id.mime_type or mimetypes.guess_type(file_name)[0] or "application/octet-stream"
+    disposition = "attachment"
 
     if "video/" in mime_type or "audio/" in mime_type or "/html" in mime_type:
         disposition = "inline"
 
+    # Headers adicionales para nombre y tamaño del archivo
+    headers = {
+        "Content-Type": mime_type,
+        "Content-Range": f"bytes {from_bytes}-{until_bytes}/{file_size}",
+        "Content-Length": str(req_length),
+        "Content-Disposition": f'{disposition}; filename="{file_name}"',
+        "Accept-Ranges": "bytes",
+        "X-File-Name": file_name,
+        "X-File-Size": str(file_size),
+    }
+
     return web.Response(
         status=206 if range_header else 200,
         body=body,
-        headers={
-            "Content-Type": f"{mime_type}",
-            "Content-Range": f"bytes {from_bytes}-{until_bytes}/{file_size}",
-            "Content-Length": str(req_length),
-            "Content-Disposition": f'{disposition}; filename="{file_name}"',
-            "Accept-Ranges": "bytes",
-        },
+        headers=headers,
     )
